@@ -33,10 +33,10 @@ FROM public.ecr.aws/lambda/python:3.14
 
 WORKDIR ${LAMBDA_TASK_ROOT}
 
-COPY --from=build --chown=1000:1000 /build .
-COPY --chown=1000:1000 index.py .
+COPY --from=build --chown=65532:65532 /build .
+COPY --chown=65532:65532 index.py .
 
-USER 1000
+USER 65532
 
 # One-shot container — no long-running process to health-check
 HEALTHCHECK NONE

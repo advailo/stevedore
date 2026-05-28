@@ -101,6 +101,7 @@ Resources:
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS outbound for AWS API calls
 
   # ──────────────────────────────────────────────────────────────────────────
   # IAM — Lambda execution role

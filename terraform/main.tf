@@ -165,7 +165,8 @@ resource "aws_iam_role_policy" "ecs_consolidation_kms" {
 # ============================================================================
 
 resource "aws_security_group" "ecs_consolidation" {
-  name = local.name
+  description = "stevedore Lambda — HTTPS egress only"
+  name        = local.name
   tags = {
     Name = local.name
   }
@@ -174,6 +175,7 @@ resource "aws_security_group" "ecs_consolidation" {
 
 resource "aws_vpc_security_group_egress_rule" "ecs_consolidation_https" {
   cidr_ipv4         = "0.0.0.0/0"
+  description       = "Allow HTTPS outbound for AWS API calls"
   from_port         = 443
   ip_protocol       = "tcp"
   security_group_id = aws_security_group.ecs_consolidation.id
