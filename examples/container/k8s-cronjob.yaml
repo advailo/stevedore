@@ -4,8 +4,8 @@ metadata:
   name: stevedore
   namespace: ops
 spec:
-  schedule: "*/5 * * * *"          # every 5 minutes
-  concurrencyPolicy: Forbid         # skip run if previous is still going
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
@@ -13,11 +13,23 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
-          serviceAccountName: stevedore   # needs IRSA / Pod Identity with ECS + EC2 permissions
+          serviceAccountName: stevedore
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: stevedore
-              image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/stevedore:latest
+              image: ghcr.io/advailo/stevedore:v0.1.0
               command: ["python", "index.py"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               env:
                 - name: CLUSTER_NAME
                   value: "my-ecs-cluster"
