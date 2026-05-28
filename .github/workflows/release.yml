@@ -103,7 +103,6 @@ jobs:
             -t ${REPO}:${VERSION} \
             -t ${REPO}:${MAJOR_MINOR} \
             -t ${REPO}:${MAJOR} \
-            -t ${REPO}:latest \
             ${REPO}:${VERSION}-amd64 \
             ${REPO}:${VERSION}-arm64
 

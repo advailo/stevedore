@@ -1,7 +1,7 @@
 # stevedore
 
-[![CI](https://github.com/advailo/stevedore/actions/workflows/ci.yml/badge.svg)](https://github.com/advailo/stevedore/actions/workflows/ci.yml)
-[![Docker](https://github.com/advailo/stevedore/actions/workflows/docker.yml/badge.svg)](https://github.com/advailo/stevedore/actions/workflows/docker.yml)
+[![Test](https://github.com/advailo/stevedore/actions/workflows/test.yml/badge.svg)](https://github.com/advailo/stevedore/actions/workflows/test.yml)
+[![Build](https://github.com/advailo/stevedore/actions/workflows/build.yml/badge.svg)](https://github.com/advailo/stevedore/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Karpenter-inspired bin-packing engine for ECS EC2 clusters.**

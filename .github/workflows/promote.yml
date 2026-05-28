@@ -1,0 +1,45 @@
+name: Promote to latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to promote (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.version }} → latest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Promote image to latest
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          REPO=ghcr.io/${{ github.repository }}
+          docker buildx imagetools create \
+            -t ${REPO}:latest \
+            ${REPO}:${VERSION}-amd64 \
+            ${REPO}:${VERSION}-arm64
+
+      - name: Mark GitHub Release as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit ${{ inputs.version }} --latest
