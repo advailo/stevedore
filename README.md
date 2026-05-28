@@ -88,16 +88,18 @@ All settings are environment variables:
 
 ## Usage
 
-### Container image (GHCR)
+### Container image
 
-Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to GitHub Container Registry on every release:
+Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to Amazon ECR Public on every release:
 
 ```
-ghcr.io/advailo/stevedore:latest        # latest release
-ghcr.io/advailo/stevedore:v1            # latest v1.x
-ghcr.io/advailo/stevedore:v1.2          # latest v1.2.x
-ghcr.io/advailo/stevedore:v1.2.3        # exact version
+public.ecr.aws/advailo/stevedore:latest        # latest release
+public.ecr.aws/advailo/stevedore:v1            # latest v1.x
+public.ecr.aws/advailo/stevedore:v1.2          # latest v1.2.x
+public.ecr.aws/advailo/stevedore:v1.2.3        # exact version
 ```
+
+> **Lambda users:** Lambda only supports private ECR repositories. Mirror the image to your own ECR before deploying — see [Mirroring to private ECR](#mirroring-to-private-ecr) below.
 
 Pull and run a dry-run against your cluster:
 
@@ -108,7 +110,7 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -v ~/.aws:/root/.aws:ro \
   --entrypoint python \
-  ghcr.io/advailo/stevedore:latest index.py
+  public.ecr.aws/y8v9n2g8/stevedore:latest index.py
 ```
 
 ### Terraform module
@@ -120,7 +122,7 @@ module "stevedore" {
   source = "github.com/advailo/stevedore//terraform?ref=v1.2.3"
 
   name_prefix      = "myapp-prod"
-  image_uri        = "ghcr.io/advailo/stevedore:v1.2.3"
+  image_uri        = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/stevedore:v1.2.3"
   ecs_cluster_name = aws_ecs_cluster.main.name
   ecs_cluster_arn  = aws_ecs_cluster.main.arn
   vpc_id           = module.vpc.vpc_id
@@ -139,7 +141,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
     NamePrefix=myapp-prod \
-    ImageUri=ghcr.io/advailo/stevedore:v1.2.3 \
+    ImageUri=123456789012.dkr.ecr.eu-north-1.amazonaws.com/stevedore:v1.2.3 \
     EcsClusterName=my-ecs-cluster \
     EcsClusterArn=arn:aws:ecs:us-east-1:123456789012:cluster/my-ecs-cluster \
     VpcId=vpc-abc123 \
@@ -155,7 +157,32 @@ Full template: [`examples/cloudformation/template.yaml`](examples/cloudformation
 kubectl apply -f examples/container/k8s-cronjob.yaml
 ```
 
-Update the `image` field to `ghcr.io/advailo/stevedore:v1.2.3` and set `CLUSTER_NAME` to your cluster. Full manifest: [`examples/container/k8s-cronjob.yaml`](examples/container/k8s-cronjob.yaml)
+Update the `image` field to your private ECR URI (see [Mirroring to private ECR](#mirroring-to-private-ecr)) and set `CLUSTER_NAME` to your cluster. Full manifest: [`examples/container/k8s-cronjob.yaml`](examples/container/k8s-cronjob.yaml)
+
+---
+
+## Mirroring to private ECR
+
+AWS Lambda only supports container images from private ECR repositories in the same region as the function. Mirror the image from ECR Public before deploying:
+
+```bash
+REGION=eu-north-1
+ACCOUNT=123456789012
+VERSION=v1.2.3
+ARCH=amd64  # or arm64 — match your Lambda architecture
+
+aws ecr create-repository --repository-name stevedore --region $REGION 2>/dev/null || true
+aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com
+docker pull public.ecr.aws/advailo/stevedore:$VERSION-$ARCH
+docker tag public.ecr.aws/advailo/stevedore:$VERSION-$ARCH $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
+docker push $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
+```
+
+Then pass the private URI as `image_uri`:
+
+```hcl
+image_uri = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/stevedore:v1.2.3"
+```
 
 ---
 
