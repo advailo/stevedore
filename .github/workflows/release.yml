@@ -106,6 +106,14 @@ jobs:
             ${REPO}:${VERSION}-amd64 \
             ${REPO}:${VERSION}-arm64
 
+      - name: Make package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api /orgs/${{ github.repository_owner }}/packages/container/stevedore \
+            --method PATCH \
+            -F visibility=public || true
+
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
