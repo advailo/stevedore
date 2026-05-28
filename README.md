@@ -93,10 +93,10 @@ All settings are environment variables:
 Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to GitHub Container Registry on every release:
 
 ```
-ghcr.io/advailo/stevedore:latest        # latest release
-ghcr.io/advailo/stevedore:v1            # latest v1.x
-ghcr.io/advailo/stevedore:v1.2          # latest v1.2.x
-ghcr.io/advailo/stevedore:v1.2.3        # exact version
+public.ecr.aws/advailo/stevedore:latest        # latest release
+public.ecr.aws/advailo/stevedore:v1            # latest v1.x
+public.ecr.aws/advailo/stevedore:v1.2          # latest v1.2.x
+public.ecr.aws/advailo/stevedore:v1.2.3        # exact version
 ```
 
 Pull and run a dry-run against your cluster:
@@ -108,7 +108,7 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -v ~/.aws:/root/.aws:ro \
   --entrypoint python \
-  ghcr.io/advailo/stevedore:latest index.py
+  public.ecr.aws/advailo/stevedore:latest index.py
 ```
 
 ### Terraform module
@@ -120,7 +120,7 @@ module "stevedore" {
   source = "github.com/advailo/stevedore//terraform?ref=v1.2.3"
 
   name_prefix      = "myapp-prod"
-  image_uri        = "ghcr.io/advailo/stevedore:v1.2.3"
+  image_uri        = "public.ecr.aws/advailo/stevedore:v1.2.3"
   ecs_cluster_name = aws_ecs_cluster.main.name
   ecs_cluster_arn  = aws_ecs_cluster.main.arn
   vpc_id           = module.vpc.vpc_id
@@ -139,7 +139,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
     NamePrefix=myapp-prod \
-    ImageUri=ghcr.io/advailo/stevedore:v1.2.3 \
+    ImageUri=public.ecr.aws/advailo/stevedore:v1.2.3 \
     EcsClusterName=my-ecs-cluster \
     EcsClusterArn=arn:aws:ecs:us-east-1:123456789012:cluster/my-ecs-cluster \
     VpcId=vpc-abc123 \
@@ -155,7 +155,7 @@ Full template: [`examples/cloudformation/template.yaml`](examples/cloudformation
 kubectl apply -f examples/container/k8s-cronjob.yaml
 ```
 
-Update the `image` field to `ghcr.io/advailo/stevedore:v1.2.3` and set `CLUSTER_NAME` to your cluster. Full manifest: [`examples/container/k8s-cronjob.yaml`](examples/container/k8s-cronjob.yaml)
+Update the `image` field to `public.ecr.aws/advailo/stevedore:v1.2.3` and set `CLUSTER_NAME` to your cluster. Full manifest: [`examples/container/k8s-cronjob.yaml`](examples/container/k8s-cronjob.yaml)
 
 ---
 
