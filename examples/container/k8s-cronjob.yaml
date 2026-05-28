@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: stevedore
+  namespace: ops
+spec:
+  schedule: "*/5 * * * *"          # every 5 minutes
+  concurrencyPolicy: Forbid         # skip run if previous is still going
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: stevedore   # needs IRSA / Pod Identity with ECS + EC2 permissions
+          containers:
+            - name: stevedore
+              image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/stevedore:latest
+              command: ["python", "index.py"]
+              env:
+                - name: CLUSTER_NAME
+                  value: "my-ecs-cluster"
+                - name: DISRUPTION_BUDGET_PERCENT
+                  value: "30"
+                - name: DRY_RUN
+                  value: "false"
+                - name: MAX_INSTANCE_AGE_DAYS
+                  value: "30"
+                - name: MIN_INSTANCE_AGE_MINUTES
+                  value: "15"
+                - name: MIN_INSTANCES_PER_AZ
+                  value: "1"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi

@@ -1,0 +1,2 @@
+# boto3 is pre-installed in public.ecr.aws/lambda/python:3.14
+# For local development outside the container: pip install boto3

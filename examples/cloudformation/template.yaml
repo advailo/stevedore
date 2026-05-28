@@ -1,0 +1,235 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  ECS Consolidation — Karpenter-inspired bin-packing engine that continuously
+  right-sizes an ECS cluster by draining underutilised EC2 instances.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Description: Prefix for all resource names, e.g. "myapp-prod".
+    Default: myapp-prod
+
+  EcsClusterName:
+    Type: String
+    Description: Name of the ECS cluster to consolidate.
+
+  EcsClusterArn:
+    Type: String
+    Description: ARN of the ECS cluster to consolidate.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the Lambda function runs.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnet IDs for the Lambda VPC configuration.
+
+  ImageUri:
+    Type: String
+    Description: ECR image URI for the Lambda container, e.g. "123456789012.dkr.ecr.us-east-1.amazonaws.com/stevedore:latest".
+
+  DisruptionBudgetPercent:
+    Type: Number
+    Default: 30
+    Description: Max percentage of active instances to drain per run.
+
+  MaxInstanceAgeDays:
+    Type: Number
+    Default: 30
+    Description: Drain instances older than this many days.
+
+  MinInstanceAgeMinutes:
+    Type: Number
+    Default: 15
+    Description: Skip instances newer than this many minutes.
+
+  MinInstancesPerAz:
+    Type: Number
+    Default: 1
+    Description: Minimum instances to retain per availability zone.
+
+  DryRun:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Log intended actions without draining when true.
+
+  ScheduleExpression:
+    Type: String
+    Default: rate(5 minutes)
+    Description: EventBridge Scheduler expression.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+
+Resources:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # CloudWatch Log Group
+  # ──────────────────────────────────────────────────────────────────────────
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${NamePrefix}-stevedore"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Security Group
+  # ──────────────────────────────────────────────────────────────────────────
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${NamePrefix}-stevedore"
+      GroupDescription: "ECS consolidation Lambda egress"
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # IAM — Lambda execution role
+  # ──────────────────────────────────────────────────────────────────────────
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-stevedore"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: ecs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:ListContainerInstances
+                Resource: !Ref EcsClusterArn
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeContainerInstances
+                  - ecs:ListTasks
+                  - ecs:UpdateContainerInstancesState
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/${EcsClusterName}/*"
+              - Effect: Allow
+                Action: ecs:DescribeTasks
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/${EcsClusterName}/*"
+        - PolicyName: ec2
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ec2:CreateNetworkInterface
+                Resource:
+                  - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*"
+                  - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*"
+                  - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/*"
+              - Effect: Allow
+                Action: ec2:DeleteNetworkInterface
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:*/*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                Resource: "*"
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${LogGroup.Arn}:*"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Lambda Function
+  # ──────────────────────────────────────────────────────────────────────────
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${NamePrefix}-stevedore"
+      Architectures: [arm64]
+      Code:
+        ImageUri: !Ref ImageUri
+      MemorySize: 128
+      PackageType: Image
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref EcsClusterName
+          DISRUPTION_BUDGET_PERCENT: !Ref DisruptionBudgetPercent
+          DRY_RUN: !Ref DryRun
+          MAX_INSTANCE_AGE_DAYS: !Ref MaxInstanceAgeDays
+          MIN_INSTANCE_AGE_MINUTES: !Ref MinInstanceAgeMinutes
+          MIN_INSTANCES_PER_AZ: !Ref MinInstancesPerAz
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        SubnetIds: !Ref SubnetIds
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # EventBridge Scheduler
+  # ──────────────────────────────────────────────────────────────────────────
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-stevedore-scheduler"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: invoke-lambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt LambdaFunction.Arn
+
+  Schedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${NamePrefix}-stevedore"
+      GroupName: default
+      ScheduleExpression: !Ref ScheduleExpression
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !GetAtt LambdaFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+
+Outputs:
+  LambdaFunctionArn:
+    Value: !GetAtt LambdaFunction.Arn
+  LambdaFunctionName:
+    Value: !Ref LambdaFunction
+  ScheduleArn:
+    Value: !GetAtt Schedule.Arn
+  SecurityGroupId:
+    Value: !Ref SecurityGroup
