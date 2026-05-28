@@ -19,6 +19,7 @@ Continuously right-sizes your cluster by draining underutilised EC2 instances so
 - [Karpenter — Consolidation](https://karpenter.sh/docs/concepts/disruption/#consolidation) — the Kubernetes consolidation design this is modelled on.
 - [AWS ECS Capacity Provider](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cluster-capacity-providers.html) — managed scaling handles scale-out and terminates fully-drained instances; stevedore handles the draining decision.
 - [Amazon ECS Cluster Auto Scaling](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cluster-auto-scaling.html) — complementary: stevedore drains, CAS terminates.
+- [Amazon ECS Managed Instances — Underutilized Instance Detection](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/managed-instances-infrastructure-optimization.html#underutilized-instance-detection) — AWS's native equivalent, but requires opting into the ECS Managed Instances provisioning model. Stevedore brings the same consolidation loop to standard EC2 capacity providers, with explicit controls over disruption budget, AZ safety, and age-based expiry.
 
 ---
 
@@ -70,6 +71,65 @@ When multiple instances qualify for S3/S4, they are sorted by:
 
 ---
 
+## Recommended cluster settings
+
+Stevedore only handles the draining decision — these capacity provider and ASG settings are required for the full consolidation loop to work:
+
+### Capacity provider
+
+```hcl
+resource "aws_ecs_capacity_provider" "ec2" {
+  name = "my-capacity-provider"
+  auto_scaling_group_provider {
+    managed_draining               = "ENABLED"
+    managed_termination_protection = "ENABLED"
+    managed_scaling {
+      status          = "ENABLED"
+      target_capacity = 100
+    }
+  }
+}
+```
+
+- **`managed_draining = ENABLED`** — when stevedore sets an instance to `DRAINING`, ECS waits for all tasks to stop before allowing the instance to be terminated.
+- **`managed_termination_protection = ENABLED`** — prevents the ASG from terminating instances that still have running tasks. ECS automatically releases the protection once an instance is fully drained.
+- **`target_capacity = 100`** — instructs CAS to scale in as soon as freed capacity allows; without this, drained instances may linger.
+
+### Auto Scaling Group
+
+```hcl
+resource "aws_autoscaling_group" "ecs" {
+  protect_from_scale_in = true   # pairs with managed_termination_protection
+  max_instance_lifetime = 2592000  # 30 days — rotate stale instances (pairs with MAX_INSTANCE_AGE_DAYS)
+}
+```
+
+- **`protect_from_scale_in = true`** — required alongside `managed_termination_protection`; the ASG will not scale in any instance unless ECS explicitly removes its protection.
+- **`max_instance_lifetime`** — ASG attempts instance replacement after this period, but with `managed_termination_protection` enabled the ASG cannot actually terminate an instance that still has running tasks — it will stall indefinitely. Stevedore's S2 (Expired) strategy is what breaks this deadlock: it drains tasks off the aged instance first, which releases the termination protection and lets the ASG complete the replacement. Set `max_instance_lifetime` *longer* than `MAX_INSTANCE_AGE_DAYS` (converted to seconds) — for example, `MAX_INSTANCE_AGE_DAYS + 1 day` — so stevedore reliably gets there first. Setting them equal creates a race condition.
+
+### ENI trunking (recommended)
+
+In standard `awsvpc` mode each task consumes a full ENI, so an `m7g.large` (3 ENIs total, 1 reserved for the instance) can run at most 2 tasks regardless of available CPU and memory. ENI trunking replaces that constraint with a trunk ENI and per-task branch ENIs, raising the task limit [significantly depending on instance type](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/eni-trunking-supported-instance-types.html). This lets stevedore pack far more tasks onto surviving instances, making meaningful consolidation possible on clusters with many small tasks.
+
+Enable it once at the account level — newly launched instances pick it up automatically:
+
+```bash
+aws ecs put-account-setting --name awsvpcTrunking --value enabled
+```
+
+Verify which instances have a trunk interface:
+
+```bash
+aws ecs list-attributes \
+  --target-type container-instance \
+  --attribute-name ecs.awsvpc-trunk-id \
+  --cluster <cluster_name>
+```
+
+> **Note:** only instances launched *after* enabling the setting get the trunk interface. Recycle existing instances (e.g. via an instance refresh) to apply it cluster-wide. Also requires resource-based IPv4 DNS requests to be disabled on the launch template — see [AWS docs](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/container-instance-eni.html) for full prerequisites.
+
+---
+
 ## Configuration
 
 All settings are environment variables:
@@ -93,10 +153,10 @@ All settings are environment variables:
 Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to Amazon ECR Public on every release:
 
 ```
-public.ecr.aws/advailo/stevedore:latest        # latest release
-public.ecr.aws/advailo/stevedore:v1            # latest v1.x
-public.ecr.aws/advailo/stevedore:v1.2          # latest v1.2.x
-public.ecr.aws/advailo/stevedore:v1.2.3        # exact version
+public.ecr.aws/y8v9n2g8/stevedore:latest        # latest release
+public.ecr.aws/y8v9n2g8/stevedore:v1            # latest v1.x
+public.ecr.aws/y8v9n2g8/stevedore:v1.2          # latest v1.2.x
+public.ecr.aws/y8v9n2g8/stevedore:v1.2.3        # exact version
 ```
 
 > **Lambda users:** Lambda only supports private ECR repositories. Mirror the image to your own ECR before deploying — see [Mirroring to private ECR](#mirroring-to-private-ecr) below.
@@ -173,8 +233,8 @@ ARCH=amd64  # or arm64 — match your Lambda architecture
 
 aws ecr create-repository --repository-name stevedore --region $REGION 2>/dev/null || true
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com
-docker pull public.ecr.aws/advailo/stevedore:$VERSION-$ARCH
-docker tag public.ecr.aws/advailo/stevedore:$VERSION-$ARCH $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
+docker pull public.ecr.aws/y8v9n2g8/stevedore:$VERSION-$ARCH
+docker tag public.ecr.aws/y8v9n2g8/stevedore:$VERSION-$ARCH $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
 docker push $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
 ```
 
@@ -224,7 +284,7 @@ The bin-pack simulation checks CPU + memory but not the maximum number of tasks 
 | Trunk mode | Branch ENI limit per instance type | No |
 | Bridge/host | `ECS_MAX_TASKS_PER_CONTAINER_INSTANCE` (default 120) | No |
 
-Trunk mode is active when the container instance has the `ecs.awsvpc-trunk-id` attribute. Branch ENI limits are not queryable via any AWS API and would require a static lookup table per instance type.
+Trunk mode is active when the container instance has the `ecs.awsvpc-trunk-id` attribute. Branch ENI limits are not queryable via any AWS API and would require a static lookup table per instance type. Because stevedore cannot verify ENI headroom on trunk-mode instances, bin-pack simulations may be optimistic — the target instance could have fewer available branch ENI slots than assumed. To compensate, reduce `DISRUPTION_BUDGET_PERCENT` (e.g. `10–15`) and raise `MIN_INSTANCES_PER_AZ` (e.g. `2`) so consolidation is more conservative and a mis-placed task has room to reschedule elsewhere.
 
 ---
 
