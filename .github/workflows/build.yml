@@ -12,8 +12,22 @@ concurrency:
 permissions: {}
 
 jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+      - run: pip install pytest
+      - run: python -m pytest test_index.py -v
+
   build:
     name: Build (${{ matrix.tag-suffix }})
+    needs: test
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
