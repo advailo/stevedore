@@ -165,7 +165,7 @@ resource "aws_iam_role_policy" "ecs_consolidation_kms" {
 # ============================================================================
 
 resource "aws_security_group" "ecs_consolidation" {
-  description = "stevedore Lambda — HTTPS egress only"
+  description = "stevedore Lambda - HTTPS egress only"
   name        = local.name
   tags = {
     Name = local.name
