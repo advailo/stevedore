@@ -82,8 +82,8 @@ jobs:
 
       - name: Push to ECR Public
         run: |
-          docker tag stevedore:${{ matrix.tag-suffix }} public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
-          docker push public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
+          docker tag stevedore:${{ matrix.tag-suffix }} public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
+          docker push public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
 
   merge:
     name: Merge manifests
@@ -109,7 +109,7 @@ jobs:
         run: |
           MAJOR_MINOR=$(echo $VERSION | cut -d. -f1,2)
           MAJOR=$(echo $VERSION | cut -d. -f1)
-          REPO=public.ecr.aws/advailo/stevedore
+          REPO=public.ecr.aws/y8v9n2g8/stevedore
 
           docker buildx imagetools create \
             -t ${REPO}:${VERSION} \
@@ -140,7 +140,7 @@ jobs:
             ## Container image
 
             ```
-            public.ecr.aws/advailo/stevedore:${{ github.ref_name }}
+            public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}
             ```
 
             ## Terraform module
@@ -148,7 +148,7 @@ jobs:
             ```hcl
             module "stevedore" {
               source   = "github.com/advailo/stevedore//terraform?ref=${{ github.ref_name }}"
-              image_uri = "public.ecr.aws/advailo/stevedore:${{ github.ref_name }}"
+              image_uri = "public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}"
             }
             ```
 
@@ -162,7 +162,7 @@ jobs:
               --stack-name stevedore \
               --capabilities CAPABILITY_NAMED_IAM \
               --parameter-overrides \
-                ImageUri=public.ecr.aws/advailo/stevedore:${{ github.ref_name }} \
+                ImageUri=public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }} \
                 EcsClusterName=my-cluster \
                 EcsClusterArn=arn:aws:ecs:us-east-1:123456789012:cluster/my-cluster \
                 VpcId=vpc-xxx \

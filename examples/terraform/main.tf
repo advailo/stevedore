@@ -32,7 +32,7 @@ module "ecs_consolidation" {
   source = "github.com/advailo/stevedore//terraform?ref=v1.0.0"
 
   name_prefix      = "myapp-prod"
-  image_uri        = "public.ecr.aws/advailo/stevedore:v1.0.0"
+  image_uri        = "public.ecr.aws/y8v9n2g8/stevedore:v1.0.0"
   ecs_cluster_name = data.aws_ecs_cluster.this.cluster_name
   ecs_cluster_arn  = data.aws_ecs_cluster.this.arn
   vpc_id           = data.aws_vpc.this.id
