@@ -153,10 +153,10 @@ All settings are environment variables:
 Pre-built multi-arch images (`linux/amd64` + `linux/arm64`) are published to Amazon ECR Public on every release:
 
 ```
-public.ecr.aws/y8v9n2g8/stevedore:latest        # latest release
-public.ecr.aws/y8v9n2g8/stevedore:v1            # latest v1.x
-public.ecr.aws/y8v9n2g8/stevedore:v1.2          # latest v1.2.x
-public.ecr.aws/y8v9n2g8/stevedore:v1.2.3        # exact version
+public.ecr.aws/advailo/stevedore:latest        # latest release
+public.ecr.aws/advailo/stevedore:v1            # latest v1.x
+public.ecr.aws/advailo/stevedore:v1.2          # latest v1.2.x
+public.ecr.aws/advailo/stevedore:v1.2.3        # exact version
 ```
 
 > **Lambda users:** Lambda only supports private ECR repositories. Mirror the image to your own ECR before deploying — see [Mirroring to private ECR](#mirroring-to-private-ecr) below.
@@ -170,7 +170,7 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -v ~/.aws:/root/.aws:ro \
   --entrypoint python \
-  public.ecr.aws/y8v9n2g8/stevedore:latest index.py
+  public.ecr.aws/advailo/stevedore:latest index.py
 ```
 
 ### Terraform module
@@ -233,8 +233,8 @@ ARCH=amd64  # or arm64 — match your Lambda architecture
 
 aws ecr create-repository --repository-name stevedore --region $REGION 2>/dev/null || true
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com
-docker pull public.ecr.aws/y8v9n2g8/stevedore:$VERSION-$ARCH
-docker tag public.ecr.aws/y8v9n2g8/stevedore:$VERSION-$ARCH $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
+docker pull public.ecr.aws/advailo/stevedore:$VERSION-$ARCH
+docker tag public.ecr.aws/advailo/stevedore:$VERSION-$ARCH $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
 docker push $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/stevedore:$VERSION
 ```
 

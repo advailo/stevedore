@@ -82,8 +82,8 @@ jobs:
 
       - name: Push to ECR Public
         run: |
-          docker tag stevedore:${{ matrix.tag-suffix }} public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
-          docker push public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
+          docker tag stevedore:${{ matrix.tag-suffix }} public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
+          docker push public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
 
   merge:
     name: Merge manifests
@@ -109,7 +109,7 @@ jobs:
         run: |
           MAJOR_MINOR=$(echo $VERSION | cut -d. -f1,2)
           MAJOR=$(echo $VERSION | cut -d. -f1)
-          REPO=public.ecr.aws/y8v9n2g8/stevedore
+          REPO=public.ecr.aws/advailo/stevedore
 
           docker buildx imagetools create \
             -t ${REPO}:${VERSION} \
@@ -140,18 +140,18 @@ jobs:
             ## Container image
 
             ```
-            public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}
+            public.ecr.aws/advailo/stevedore:${{ github.ref_name }}
             ```
 
             > **Lambda users:** Lambda does not support multi-arch manifest lists. Use the arch-specific tag:
-            > `public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}-amd64` or `-arm64`
+            > `public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-amd64` or `-arm64`
 
             ## Terraform module
 
             Lambda requires a private ECR image. Mirror first:
             ```bash
-            docker pull public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}-amd64
-            docker tag public.ecr.aws/y8v9n2g8/stevedore:${{ github.ref_name }}-amd64 \
+            docker pull public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-amd64
+            docker tag public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-amd64 \
               123456789012.dkr.ecr.<region>.amazonaws.com/stevedore:${{ github.ref_name }}
             docker push 123456789012.dkr.ecr.<region>.amazonaws.com/stevedore:${{ github.ref_name }}
             ```

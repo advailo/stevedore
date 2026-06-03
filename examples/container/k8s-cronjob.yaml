@@ -23,7 +23,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: stevedore
-              image: public.ecr.aws/y8v9n2g8/stevedore:v0.1.0
+              image: public.ecr.aws/advailo/stevedore:v0.1.0
               command: ["python", "index.py"]
               securityContext:
                 allowPrivilegeEscalation: false

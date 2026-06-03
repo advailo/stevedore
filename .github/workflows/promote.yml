@@ -39,7 +39,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          REPO=public.ecr.aws/y8v9n2g8/stevedore
+          REPO=public.ecr.aws/advailo/stevedore
           docker buildx imagetools create \
             -t ${REPO}:latest \
             ${REPO}:${VERSION}-amd64 \
