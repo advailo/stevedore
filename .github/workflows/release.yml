@@ -158,7 +158,8 @@ jobs:
 
             ```hcl
             module "stevedore" {
-              source   = "github.com/advailo/stevedore//terraform?ref=${{ github.ref_name }}"
+              source    = "github.com/advailo/stevedore//terraform?ref=${{ github.ref_name }}"
+              ecr_arn   = aws_ecr_repository.stevedore.arn
               image_uri = "123456789012.dkr.ecr.<region>.amazonaws.com/stevedore:${{ github.ref_name }}"
             }
             ```
@@ -173,6 +174,7 @@ jobs:
               --stack-name stevedore \
               --capabilities CAPABILITY_NAMED_IAM \
               --parameter-overrides \
+                EcrArn=arn:aws:ecr:<region>:123456789012:repository/stevedore \
                 ImageUri=123456789012.dkr.ecr.<region>.amazonaws.com/stevedore:${{ github.ref_name }} \
                 EcsClusterName=my-cluster \
                 EcsClusterArn=arn:aws:ecs:us-east-1:123456789012:cluster/my-cluster \
