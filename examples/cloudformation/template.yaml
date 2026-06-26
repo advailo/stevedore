@@ -25,6 +25,10 @@ Parameters:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Private subnet IDs for the Lambda VPC configuration.
 
+  EcrArn:
+    Type: String
+    Description: ARN of the ECR repository the Lambda image is pulled from, e.g. "arn:aws:ecr:us-east-1:123456789012:repository/stevedore".
+
   ImageUri:
     Type: String
     Description: ECR image URI for the Lambda container, e.g. "123456789012.dkr.ecr.us-east-1.amazonaws.com/stevedore:latest".
@@ -138,6 +142,19 @@ Resources:
               - Effect: Allow
                 Action: ecs:DescribeTasks
                 Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/${EcsClusterName}/*"
+        - PolicyName: ecr
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !Ref EcrArn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
         - PolicyName: ec2
           PolicyDocument:
             Version: "2012-10-17"

@@ -115,6 +115,29 @@ resource "aws_iam_role_policy" "ecs_consolidation_ec2" {
   })
 }
 
+resource "aws_iam_role_policy" "ecs_consolidation_ecr" {
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Effect   = "Allow"
+        Resource = [var.ecr_arn]
+      },
+      {
+        Action   = ["ecr:GetAuthorizationToken"]
+        Effect   = "Allow"
+        Resource = ["*"]
+      }
+    ]
+  })
+  role = aws_iam_role.ecs_consolidation.id
+}
+
 resource "aws_iam_role_policy" "ecs_consolidation_logs" {
   role = aws_iam_role.ecs_consolidation.id
   policy = jsonencode({

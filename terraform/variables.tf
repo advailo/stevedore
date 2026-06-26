@@ -3,6 +3,11 @@ variable "name_prefix" {
   type        = string
 }
 
+variable "ecr_arn" {
+  description = "ARN of the ECR repository the Lambda image is pulled from."
+  type        = string
+}
+
 variable "image_uri" {
   description = "ECR image URI for the Lambda container, e.g. '123456789012.dkr.ecr.us-east-1.amazonaws.com/stevedore:latest'."
   type        = string

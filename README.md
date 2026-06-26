@@ -182,6 +182,7 @@ module "stevedore" {
   source = "github.com/advailo/stevedore//terraform?ref=v1.2.3"
 
   name_prefix      = "myapp-prod"
+  ecr_arn          = aws_ecr_repository.stevedore.arn
   image_uri        = "123456789012.dkr.ecr.<region>.amazonaws.com/stevedore:v1.2.3"
   ecs_cluster_name = aws_ecs_cluster.main.name
   ecs_cluster_arn  = aws_ecs_cluster.main.arn
@@ -201,6 +202,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
     NamePrefix=myapp-prod \
+    EcrArn=arn:aws:ecr:<region>:123456789012:repository/stevedore \
     ImageUri=123456789012.dkr.ecr.<region>.amazonaws.com/stevedore:v1.2.3 \
     EcsClusterName=my-ecs-cluster \
     EcsClusterArn=arn:aws:ecs:us-east-1:123456789012:cluster/my-ecs-cluster \
