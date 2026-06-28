@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from conftest import (
-    mock_ecs, mock_ec2, make_container_instance, make_task, make_instance_arn,
+    mock_ecs, make_container_instance, make_task, make_instance_arn,
     make_task_arn, setup_cluster, add_draining_instances,
 )
 
