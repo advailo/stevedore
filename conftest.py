@@ -1,6 +1,7 @@
 """Shared test fixtures for stevedore tests."""
 import os
 import sys
+import types
 from datetime import datetime, timezone, timedelta
 
 import pytest
@@ -84,8 +85,22 @@ class MockBoto3:
         raise ValueError(f"Unexpected service: {service}")
 
 
-# Install mock before importing index
+class ClientError(Exception):
+    def __init__(self, error_response=None, operation_name=None):
+        self.response = error_response or {}
+        self.operation_name = operation_name
+        super().__init__(f"{operation_name}: {self.response}")
+
+
+botocore_exceptions = types.ModuleType("botocore.exceptions")
+botocore_exceptions.ClientError = ClientError
+botocore_module = types.ModuleType("botocore")
+botocore_module.exceptions = botocore_exceptions
+
+# Install mocks before importing index
 sys.modules["boto3"] = MockBoto3
+sys.modules["botocore"] = botocore_module
+sys.modules["botocore.exceptions"] = botocore_exceptions
 
 # Set environment variables before import
 os.environ.setdefault("CLUSTER_NAME", "test-cluster")
