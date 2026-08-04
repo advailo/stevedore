@@ -19,6 +19,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 import boto3
+from botocore.exceptions import ClientError
 
 # ============================================================================
 # Configuration
@@ -410,7 +411,7 @@ def drain_instances(cluster, instances, dry_run):
                 )
                 logger.info("Drained %s", inst["ec2_instance_id"], extra=extra)
                 drained += 1
-            except Exception as e:
+            except ClientError as e:
                 logger.error(
                     "Failed to drain %s: %s", inst["ec2_instance_id"], e, extra=extra
                 )
