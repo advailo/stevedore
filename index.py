@@ -5,7 +5,7 @@ expired instances. Uses bin-pack simulation (FFD) to verify tasks can be
 relocated before draining.
 
 Strategies (executed in order):
-  1. Empty     — instances with 0 running tasks
+  1. Empty     — instances with 0 running tasks, idle for EMPTY_INSTANCE_GRACE_MINUTES
   2. Expired   — instances older than MAX_INSTANCE_AGE_DAYS
   3. Multi     — greedy set of underutilized instances (bin-pack validated)
   4. Single    — fallback: one underutilized instance (bin-pack validated)
@@ -30,6 +30,7 @@ DISRUPTION_BUDGET_PERCENT = int(os.environ.get("DISRUPTION_BUDGET_PERCENT", "30"
 MIN_INSTANCE_AGE_MINUTES = int(os.environ.get("MIN_INSTANCE_AGE_MINUTES", "15"))
 MAX_INSTANCE_AGE_DAYS = int(os.environ.get("MAX_INSTANCE_AGE_DAYS", "30"))
 MIN_INSTANCES_PER_AZ = int(os.environ.get("MIN_INSTANCES_PER_AZ", "1"))
+EMPTY_INSTANCE_GRACE_MINUTES = int(os.environ.get("EMPTY_INSTANCE_GRACE_MINUTES", "10"))
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
@@ -43,7 +44,7 @@ COMPONENT = "stevedore"
 class JsonFormatter(logging.Formatter):
     EXTRA_KEYS = (
         "strategy", "instance_id", "task_count", "cpu_util", "memory_util",
-        "drain_count", "budget", "event_type", "age_days", "reason",
+        "drain_count", "budget", "event_type", "age_days", "idle_minutes", "reason",
     )
 
     def format(self, record):
@@ -74,6 +75,7 @@ if not logger.handlers:
 
 ecs = boto3.client("ecs")
 ec2 = boto3.client("ec2")
+autoscaling = boto3.client("autoscaling")
 
 # ============================================================================
 # Discovery
@@ -94,13 +96,13 @@ def _paginate_container_instances(cluster, status):
     return arns
 
 
-def _paginate_tasks(cluster, container_instance_arn):
+def _paginate_tasks(cluster, container_instance_arn, desired_status="RUNNING"):
     """List all task ARNs for a container instance with pagination."""
     arns = []
     kwargs = {
         "cluster": cluster,
         "containerInstance": container_instance_arn,
-        "desiredStatus": "RUNNING",
+        "desiredStatus": desired_status,
     }
     while True:
         resp = ecs.list_tasks(**kwargs)
@@ -112,6 +114,25 @@ def _paginate_tasks(cluster, container_instance_arn):
     return arns
 
 
+def _last_stopped_task_at(cluster, container_instance_arn):
+    """Most recent stoppedAt among this instance's recently-stopped tasks, or
+    None if it never ran one. ECS keeps stopped-task records for roughly an
+    hour after they stop, which is enough to tell a genuinely idle instance
+    apart from one that just finished a task moments ago."""
+    arns = _paginate_tasks(cluster, container_instance_arn, "STOPPED")
+    if not arns:
+        return None
+    latest = None
+    for i in range(0, len(arns), 100):
+        batch = arns[i:i + 100]
+        resp = ecs.describe_tasks(cluster=cluster, tasks=batch)
+        for t in resp.get("tasks", []):
+            stopped_at = t.get("stoppedAt")
+            if stopped_at and (latest is None or stopped_at > latest):
+                latest = stopped_at
+    return latest
+
+
 def _get_resource(resources, name):
     """Extract integer value from ECS resource list by name."""
     for r in resources:
@@ -120,30 +141,40 @@ def _get_resource(resources, name):
     return 0
 
 
-def discover_cluster_state(cluster):
-    """Discover all instances and their tasks with full pagination."""
-    active_arns = _paginate_container_instances(cluster, "ACTIVE")
-    draining_arns = _paginate_container_instances(cluster, "DRAINING")
-
-    if not active_arns:
-        return {"active_instances": [], "draining_count": len(draining_arns)}
-
-    # Describe active instances in batches of 100
+def _describe_container_instances(cluster, arns):
+    """Describe container instances in batches of 100, filtering out EXTERNAL
+    (ECS Anywhere) instances — they are not managed by auto-scaling and must
+    never be drained or unprotected by consolidation. agentType may be missing
+    from the API response, so also check ec2InstanceId prefix: "mi-" = managed
+    instance (ECS Anywhere), "i-" = EC2."""
+    if not arns:
+        return []
     instances = []
-    for i in range(0, len(active_arns), 100):
-        batch = active_arns[i:i + 100]
+    for i in range(0, len(arns), 100):
+        batch = arns[i:i + 100]
         resp = ecs.describe_container_instances(
             cluster=cluster, containerInstances=batch
         )
         instances.extend(resp.get("containerInstances", []))
+    return [ci for ci in instances
+            if ci.get("agentType", "ec2") != "EXTERNAL"
+            and not ci.get("ec2InstanceId", "").startswith("mi-")]
 
-    # Filter out EXTERNAL (ECS Anywhere) instances — they are not managed by
-    # auto-scaling and must never be drained by consolidation.
-    # agentType may be missing from API response, so also check ec2InstanceId
-    # prefix: "mi-" = managed instance (ECS Anywhere), "i-" = EC2.
-    instances = [ci for ci in instances
-                 if ci.get("agentType", "ec2") != "EXTERNAL"
-                 and not ci.get("ec2InstanceId", "").startswith("mi-")]
+
+def discover_cluster_state(cluster):
+    """Discover all instances and their tasks with full pagination."""
+    active_arns = _paginate_container_instances(cluster, "ACTIVE")
+    draining_arns = _paginate_container_instances(cluster, "DRAINING")
+    draining_instances = _describe_container_instances(cluster, draining_arns)
+
+    if not active_arns:
+        return {
+            "active_instances": [],
+            "draining_count": len(draining_arns),
+            "draining_instances": draining_instances,
+        }
+
+    instances = _describe_container_instances(cluster, active_arns)
 
     # Fetch AZ for all EC2 instances in one batched call
     ec2_ids = [ci["ec2InstanceId"] for ci in instances]
@@ -175,6 +206,10 @@ def discover_cluster_state(cluster):
                     "az": az,
                 })
 
+        # Only relevant to instances that currently look empty — an instance
+        # with running tasks isn't a drain candidate for S1 regardless.
+        last_stopped_at = _last_stopped_task_at(cluster, arn) if not tasks else None
+
         active_instances.append({
             "arn": arn,
             "ec2_instance_id": ci["ec2InstanceId"],
@@ -187,11 +222,13 @@ def discover_cluster_state(cluster):
             "registered_eni": _get_resource(ci["registeredResources"], "ENI"),
             "remaining_eni": _get_resource(ci["remainingResources"], "ENI"),
             "tasks": tasks,
+            "last_stopped_at": last_stopped_at,
         })
 
     return {
         "active_instances": active_instances,
         "draining_count": len(draining_arns),
+        "draining_instances": draining_instances,
     }
 
 
@@ -216,9 +253,19 @@ def compute_instance_metrics(instance):
     registered_at = instance["registered_at"]
     if registered_at.tzinfo is None:
         registered_at = registered_at.replace(tzinfo=timezone.utc)
-    age = datetime.now(timezone.utc) - registered_at
+    now = datetime.now(timezone.utc)
+    age = now - registered_at
     instance["age_minutes"] = age.total_seconds() / 60
     instance["age_days"] = age.days
+
+    if instance["task_count"] == 0:
+        last_stopped_at = instance.get("last_stopped_at")
+        if last_stopped_at and last_stopped_at.tzinfo is None:
+            last_stopped_at = last_stopped_at.replace(tzinfo=timezone.utc)
+        idle_since = last_stopped_at or registered_at
+        instance["idle_minutes"] = (now - idle_since).total_seconds() / 60
+    else:
+        instance["idle_minutes"] = 0
 
 
 # ============================================================================
@@ -326,8 +373,18 @@ def can_bin_pack(tasks, target_instances):
 
 
 def find_empty_instances(candidates):
-    """Instances with zero running tasks."""
-    return [inst for inst in candidates if inst["task_count"] == 0]
+    """Instances with zero running tasks that have stayed empty for at least
+    EMPTY_INSTANCE_GRACE_MINUTES. Guards against draining an instance that
+    just finished a task and is likely to receive another one shortly —
+    without the grace period, bursty/short-lived task churn causes instances
+    to be drained and then immediately need replacement capacity for the next
+    task. Candidates without a precomputed idle_minutes are treated as fully
+    idle (backward compatible with callers that only track task_count)."""
+    return [
+        inst for inst in candidates
+        if inst["task_count"] == 0
+        and inst.get("idle_minutes", math.inf) >= EMPTY_INSTANCE_GRACE_MINUTES
+    ]
 
 
 # ============================================================================
@@ -419,6 +476,59 @@ def drain_instances(cluster, instances, dry_run):
 
 
 # ============================================================================
+# Scale-In Protection Cleanup
+# ============================================================================
+
+
+def release_drained_protection(cluster, draining_instances, dry_run):
+    """Release ASG scale-in protection on DRAINING instances that have fully
+    emptied out (0 running and 0 pending tasks).
+
+    ECS's managed-draining lifecycle hook only fires when the ASG itself
+    initiates a termination (a real scale-in event); it never sees instances
+    drained out-of-band via the ECS API the way this tool does. Without this,
+    an instance stevedore drains stays protected — and billed — forever, since
+    nothing else ever tells the ASG it's safe to reclaim. Returns the count of
+    instances unprotected."""
+    fully_drained = [
+        ci for ci in draining_instances
+        if ci.get("runningTasksCount", 0) == 0 and ci.get("pendingTasksCount", 0) == 0
+    ]
+    if not fully_drained:
+        return 0
+
+    ec2_ids = [ci["ec2InstanceId"] for ci in fully_drained]
+    asg_instances = []
+    for i in range(0, len(ec2_ids), 50):
+        resp = autoscaling.describe_auto_scaling_instances(InstanceIds=ec2_ids[i:i + 50])
+        asg_instances.extend(resp.get("AutoScalingInstances", []))
+
+    released = 0
+    for asg_inst in asg_instances:
+        if not asg_inst.get("ProtectedFromScaleIn"):
+            continue
+        instance_id = asg_inst["InstanceId"]
+        extra = {"instance_id": instance_id, "event_type": "unprotect"}
+        if dry_run:
+            logger.info("DRY RUN: would release protection on %s", instance_id, extra=extra)
+            released += 1
+            continue
+        try:
+            autoscaling.set_instance_protection(
+                AutoScalingGroupName=asg_inst["AutoScalingGroupName"],
+                InstanceIds=[instance_id],
+                ProtectedFromScaleIn=False,
+            )
+            logger.info("Released protection on %s", instance_id, extra=extra)
+            released += 1
+        except ClientError as e:
+            logger.error(
+                "Failed to release protection on %s: %s", instance_id, e, extra=extra
+            )
+    return released
+
+
+# ============================================================================
 # Handler
 # ============================================================================
 
@@ -435,6 +545,13 @@ def handler(event, context):
 
     state = discover_cluster_state(CLUSTER_NAME)
     active = state["active_instances"]
+
+    released = release_drained_protection(CLUSTER_NAME, state["draining_instances"], DRY_RUN)
+    if released:
+        logger.info(
+            "Released scale-in protection on %d drained instance(s)", released,
+            extra={"event_type": "unprotect", "drain_count": released},
+        )
 
     if not active:
         logger.info("No active instances", extra={"event_type": "skip"})
@@ -481,8 +598,13 @@ def handler(event, context):
             strategy_used = "empty"
             for inst in take:
                 logger.info(
-                    "S1 empty: %s", inst["ec2_instance_id"],
-                    extra={"strategy": "empty", "instance_id": inst["ec2_instance_id"]},
+                    "S1 empty: %s (idle %.1fm)",
+                    inst["ec2_instance_id"], inst.get("idle_minutes", 0),
+                    extra={
+                        "strategy": "empty",
+                        "instance_id": inst["ec2_instance_id"],
+                        "idle_minutes": round(inst.get("idle_minutes", 0), 1),
+                    },
                 )
 
     # Strategy 2: Expired
@@ -579,7 +701,10 @@ def handler(event, context):
         },
     )
 
-    return {"statusCode": 200, "body": {"drained": drained, "dry_run": DRY_RUN}}
+    return {
+        "statusCode": 200,
+        "body": {"drained": drained, "released": released, "dry_run": DRY_RUN},
+    }
 
 
 if __name__ == "__main__":

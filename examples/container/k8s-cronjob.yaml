@@ -37,6 +37,8 @@ spec:
                   value: "30"
                 - name: DRY_RUN
                   value: "false"
+                - name: EMPTY_INSTANCE_GRACE_MINUTES
+                  value: "10"
                 - name: MAX_INSTANCE_AGE_DAYS
                   value: "30"
                 - name: MIN_INSTANCE_AGE_MINUTES

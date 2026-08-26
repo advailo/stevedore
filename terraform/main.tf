@@ -78,6 +78,23 @@ resource "aws_iam_role_policy" "ecs_consolidation_ecs" {
   })
 }
 
+resource "aws_iam_role_policy" "ecs_consolidation_autoscaling" {
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "autoscaling:DescribeAutoScalingInstances",
+          "autoscaling:SetInstanceProtection",
+        ]
+        Effect   = "Allow"
+        Resource = ["*"]
+      }
+    ]
+  })
+  role = aws_iam_role.ecs_consolidation.id
+}
+
 resource "aws_iam_role_policy" "ecs_consolidation_ec2" {
   role = aws_iam_role.ecs_consolidation.id
   policy = jsonencode({
@@ -219,12 +236,13 @@ resource "aws_lambda_function" "ecs_consolidation" {
   timeout       = 60
   environment {
     variables = {
-      CLUSTER_NAME              = var.ecs_cluster_name
-      DISRUPTION_BUDGET_PERCENT = var.disruption_budget_percent
-      DRY_RUN                   = var.dry_run
-      MAX_INSTANCE_AGE_DAYS     = var.max_instance_age_days
-      MIN_INSTANCE_AGE_MINUTES  = var.min_instance_age_minutes
-      MIN_INSTANCES_PER_AZ      = var.min_instances_per_az
+      CLUSTER_NAME                 = var.ecs_cluster_name
+      DISRUPTION_BUDGET_PERCENT    = var.disruption_budget_percent
+      DRY_RUN                      = var.dry_run
+      EMPTY_INSTANCE_GRACE_MINUTES = var.empty_instance_grace_minutes
+      MAX_INSTANCE_AGE_DAYS        = var.max_instance_age_days
+      MIN_INSTANCE_AGE_MINUTES     = var.min_instance_age_minutes
+      MIN_INSTANCES_PER_AZ         = var.min_instances_per_az
     }
   }
   vpc_config {

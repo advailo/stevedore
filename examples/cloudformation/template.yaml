@@ -38,6 +38,11 @@ Parameters:
     Default: 30
     Description: Max percentage of active instances to drain per run.
 
+  EmptyInstanceGraceMinutes:
+    Type: Number
+    Default: 10
+    Description: Minutes an instance must stay idle (0 running tasks) before it's drained.
+
   MaxInstanceAgeDays:
     Type: Number
     Default: 30
@@ -204,6 +209,7 @@ Resources:
           CLUSTER_NAME: !Ref EcsClusterName
           DISRUPTION_BUDGET_PERCENT: !Ref DisruptionBudgetPercent
           DRY_RUN: !Ref DryRun
+          EMPTY_INSTANCE_GRACE_MINUTES: !Ref EmptyInstanceGraceMinutes
           MAX_INSTANCE_AGE_DAYS: !Ref MaxInstanceAgeDays
           MIN_INSTANCE_AGE_MINUTES: !Ref MinInstanceAgeMinutes
           MIN_INSTANCES_PER_AZ: !Ref MinInstancesPerAz

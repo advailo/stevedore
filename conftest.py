@@ -32,11 +32,19 @@ class MockECS:
 
     def list_tasks(self, **kwargs):
         ci_arn = kwargs.get("containerInstance", "")
-        return {"taskArns": [t["taskArn"] for t in self._tasks.get(ci_arn, [])]}
+        desired_status = kwargs.get("desiredStatus", "RUNNING")
+        if desired_status == "STOPPED":
+            tasks = self._stopped_tasks.get(ci_arn, [])
+        else:
+            tasks = self._tasks.get(ci_arn, [])
+        return {"taskArns": [t["taskArn"] for t in tasks]}
 
     def describe_tasks(self, **kwargs):
         task_arns = set(kwargs.get("tasks", []))
-        all_tasks = [t for tasks in self._tasks.values() for t in tasks]
+        all_tasks = [
+            t for tasks in list(self._tasks.values()) + list(self._stopped_tasks.values())
+            for t in tasks
+        ]
         return {"tasks": [t for t in all_tasks if t["taskArn"] in task_arns]}
 
     def update_container_instances_state(self, **kwargs):
@@ -46,6 +54,7 @@ class MockECS:
     def reset(self):
         self._container_instances = []
         self._tasks = {}
+        self._stopped_tasks = {}
         self._active_arns = []
         self._draining_arns = []
         self.drain_calls = []
@@ -71,8 +80,35 @@ class MockEC2:
         self._az_map = {}  # ec2_instance_id -> availability_zone
 
 
+class MockAutoScaling:
+    def __init__(self):
+        self.reset()
+
+    def describe_auto_scaling_instances(self, **kwargs):
+        instance_ids = set(kwargs.get("InstanceIds", []))
+        return {
+            "AutoScalingInstances": [
+                inst for inst in self._instances.values()
+                if inst["InstanceId"] in instance_ids
+            ]
+        }
+
+    def set_instance_protection(self, **kwargs):
+        self.protection_calls.append(kwargs)
+        protected = kwargs.get("ProtectedFromScaleIn", False)
+        for instance_id in kwargs.get("InstanceIds", []):
+            if instance_id in self._instances:
+                self._instances[instance_id]["ProtectedFromScaleIn"] = protected
+        return {}
+
+    def reset(self):
+        self._instances = {}  # ec2_instance_id -> AutoScalingInstance dict
+        self.protection_calls = []
+
+
 mock_ecs = MockECS()
 mock_ec2 = MockEC2()
+mock_autoscaling = MockAutoScaling()
 
 
 class MockBoto3:
@@ -82,6 +118,8 @@ class MockBoto3:
             return mock_ecs
         if service == "ec2":
             return mock_ec2
+        if service == "autoscaling":
+            return mock_autoscaling
         raise ValueError(f"Unexpected service: {service}")
 
 
@@ -170,6 +208,18 @@ def make_task(task_id, cpu=256, memory=512, group="service:test-app"):
     }
 
 
+def make_stopped_task(task_id, stopped_minutes_ago=0):
+    """Create a mock ECS task that recently stopped."""
+    return {
+        "taskArn": make_task_arn(task_id),
+        "cpu": "0",
+        "memory": "0",
+        "group": "",
+        "lastStatus": "STOPPED",
+        "stoppedAt": datetime.now(timezone.utc) - timedelta(minutes=stopped_minutes_ago),
+    }
+
+
 def setup_cluster(instances_config):
     """Set up mock cluster from config list.
 
@@ -185,6 +235,7 @@ def setup_cluster(instances_config):
     """
     mock_ecs.reset()
     mock_ec2.reset()
+    mock_autoscaling.reset()
     for cfg in instances_config:
         ci = make_container_instance(
             cfg["id"],
@@ -215,6 +266,14 @@ def setup_cluster(instances_config):
             ))
         mock_ecs._tasks[arn] = tasks
 
+        stopped_tasks = []
+        for st_cfg in cfg.get("stopped_tasks", []):
+            stopped_tasks.append(make_stopped_task(
+                st_cfg["id"],
+                stopped_minutes_ago=st_cfg.get("stopped_minutes_ago", 0),
+            ))
+        mock_ecs._stopped_tasks[arn] = stopped_tasks
+
     return mock_ecs
 
 
@@ -224,8 +283,31 @@ def add_draining_instances(count):
         mock_ecs._draining_arns.append(make_instance_arn(f"draining-{i}"))
 
 
+def add_draining_container_instance(instance_id, running_tasks_count=0, pending_tasks_count=0):
+    """Add a fully-described DRAINING container instance to the mock, so
+    describe_container_instances can return its runningTasksCount /
+    pendingTasksCount for stevedore's protection-release check."""
+    ci = make_container_instance(instance_id)
+    ci["runningTasksCount"] = running_tasks_count
+    ci["pendingTasksCount"] = pending_tasks_count
+    arn = ci["containerInstanceArn"]
+    mock_ecs._container_instances.append(ci)
+    mock_ecs._draining_arns.append(arn)
+    return ci
+
+
+def register_asg_instance(ec2_instance_id, asg_name="test-asg", protected=True):
+    """Register an EC2 instance with the mock Auto Scaling Group."""
+    mock_autoscaling._instances[ec2_instance_id] = {
+        "InstanceId": ec2_instance_id,
+        "AutoScalingGroupName": asg_name,
+        "ProtectedFromScaleIn": protected,
+    }
+
+
 @pytest.fixture(autouse=True)
 def reset_mocks():
     """Reset all mock state before each test."""
     mock_ecs.reset()
     mock_ec2.reset()
+    mock_autoscaling.reset()

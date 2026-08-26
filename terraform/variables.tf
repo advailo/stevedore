@@ -63,6 +63,12 @@ variable "dry_run" {
   default     = false
 }
 
+variable "empty_instance_grace_minutes" {
+  description = "Minutes an instance must stay idle (0 running tasks) before it's drained (Strategy 1: Empty)."
+  type        = number
+  default     = 10
+}
+
 variable "max_instance_age_days" {
   description = "Drain instances older than this many days (Strategy 2: Expired)."
   type        = number

@@ -5,8 +5,9 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from conftest import (
-    mock_ecs, make_container_instance, make_task, make_instance_arn,
+    mock_ecs, mock_autoscaling, make_container_instance, make_task, make_instance_arn,
     make_task_arn, setup_cluster, add_draining_instances,
+    add_draining_container_instance, register_asg_instance,
 )
 
 import index
@@ -100,6 +101,37 @@ class TestMetrics:
         index.compute_instance_metrics(inst)
         assert inst["age_days"] == 31
         assert inst["age_minutes"] > 31 * 24 * 60
+
+    def test_idle_minutes_zero_when_tasks_running(self):
+        inst = {
+            "registered_cpu": 2048, "remaining_cpu": 1024,
+            "registered_memory": 7680, "remaining_memory": 3840,
+            "registered_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "tasks": [{"arn": "t1"}],
+        }
+        index.compute_instance_metrics(inst)
+        assert inst["idle_minutes"] == 0
+
+    def test_idle_minutes_measured_from_last_stopped_task(self):
+        inst = {
+            "registered_cpu": 2048, "remaining_cpu": 2048,
+            "registered_memory": 7680, "remaining_memory": 7680,
+            "registered_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "tasks": [],
+            "last_stopped_at": datetime.now(timezone.utc) - timedelta(minutes=3),
+        }
+        index.compute_instance_metrics(inst)
+        assert inst["idle_minutes"] == pytest.approx(3, abs=0.1)
+
+    def test_idle_minutes_falls_back_to_registered_at_when_no_task_ever_ran(self):
+        inst = {
+            "registered_cpu": 2048, "remaining_cpu": 2048,
+            "registered_memory": 7680, "remaining_memory": 7680,
+            "registered_at": datetime.now(timezone.utc) - timedelta(minutes=45),
+            "tasks": [],
+        }
+        index.compute_instance_metrics(inst)
+        assert inst["idle_minutes"] == pytest.approx(45, abs=0.1)
 
 
 # ============================================================================
@@ -217,6 +249,20 @@ class TestEmpty:
     def test_all_empty(self):
         candidates = [{"task_count": 0, "arn": "a"}, {"task_count": 0, "arn": "b"}]
         assert len(index.find_empty_instances(candidates)) == 2
+
+    def test_recently_emptied_excluded_by_grace_period(self):
+        candidates = [{"task_count": 0, "arn": "a", "idle_minutes": 2}]
+        assert index.find_empty_instances(candidates) == []
+
+    def test_idle_past_grace_period_included(self):
+        candidates = [{"task_count": 0, "arn": "a", "idle_minutes": 11}]
+        result = index.find_empty_instances(candidates)
+        assert len(result) == 1
+        assert result[0]["arn"] == "a"
+
+    def test_idle_exactly_at_grace_boundary_included(self):
+        candidates = [{"task_count": 0, "arn": "a", "idle_minutes": 10}]
+        assert len(index.find_empty_instances(candidates)) == 1
 
 
 # ============================================================================
@@ -433,6 +479,84 @@ class TestDryRun:
 
 
 # ============================================================================
+# Scale-In Protection Cleanup
+# ============================================================================
+
+
+class TestReleaseDrainedProtection:
+    def test_releases_protection_on_fully_drained_instance(self, monkeypatch):
+        monkeypatch.setattr(index, "DRY_RUN", False)
+        ci = add_draining_container_instance("drained", running_tasks_count=0, pending_tasks_count=0)
+        register_asg_instance(ci["ec2InstanceId"], protected=True)
+
+        released = index.release_drained_protection("test-cluster", [ci], dry_run=False)
+
+        assert released == 1
+        assert len(mock_autoscaling.protection_calls) == 1
+        call = mock_autoscaling.protection_calls[0]
+        assert call["InstanceIds"] == [ci["ec2InstanceId"]]
+        assert call["ProtectedFromScaleIn"] is False
+
+    def test_skips_instance_still_running_tasks(self, monkeypatch):
+        monkeypatch.setattr(index, "DRY_RUN", False)
+        ci = add_draining_container_instance("busy", running_tasks_count=2, pending_tasks_count=0)
+        register_asg_instance(ci["ec2InstanceId"], protected=True)
+
+        released = index.release_drained_protection("test-cluster", [ci], dry_run=False)
+
+        assert released == 0
+        assert mock_autoscaling.protection_calls == []
+
+    def test_skips_instance_with_pending_tasks(self, monkeypatch):
+        monkeypatch.setattr(index, "DRY_RUN", False)
+        ci = add_draining_container_instance("pending", running_tasks_count=0, pending_tasks_count=1)
+        register_asg_instance(ci["ec2InstanceId"], protected=True)
+
+        released = index.release_drained_protection("test-cluster", [ci], dry_run=False)
+
+        assert released == 0
+        assert mock_autoscaling.protection_calls == []
+
+    def test_skips_instance_already_unprotected(self, monkeypatch):
+        monkeypatch.setattr(index, "DRY_RUN", False)
+        ci = add_draining_container_instance("free", running_tasks_count=0, pending_tasks_count=0)
+        register_asg_instance(ci["ec2InstanceId"], protected=False)
+
+        released = index.release_drained_protection("test-cluster", [ci], dry_run=False)
+
+        assert released == 0
+        assert mock_autoscaling.protection_calls == []
+
+    def test_dry_run_does_not_call_autoscaling(self):
+        ci = add_draining_container_instance("drained", running_tasks_count=0, pending_tasks_count=0)
+        register_asg_instance(ci["ec2InstanceId"], protected=True)
+
+        released = index.release_drained_protection("test-cluster", [ci], dry_run=True)
+
+        assert released == 1
+        assert mock_autoscaling.protection_calls == []
+
+    def test_no_draining_instances_is_a_noop(self):
+        assert index.release_drained_protection("test-cluster", [], dry_run=False) == 0
+
+    def test_handler_releases_protection_for_zombie_drained_instance(self, monkeypatch):
+        """Reproduces the observed production pattern: stevedore drained an
+        instance out-of-band, ECS never released its ASG protection on its
+        own, and it would otherwise sit DRAINING-but-protected forever."""
+        monkeypatch.setattr(index, "DRY_RUN", False)
+        setup_cluster([{"id": "aaa", "age_minutes": 60, "tasks": [{"id": "t1"}]}])
+        ci = add_draining_container_instance("zombie", running_tasks_count=0, pending_tasks_count=0)
+        register_asg_instance(ci["ec2InstanceId"], protected=True)
+
+        # Protection is released regardless of disruption budget — it isn't a
+        # drain decision, it's cleanup of an instance already fully drained.
+        index.handler({}, None)
+
+        assert len(mock_autoscaling.protection_calls) == 1
+        assert mock_autoscaling.protection_calls[0]["ProtectedFromScaleIn"] is False
+
+
+# ============================================================================
 # Integration-Style Tests
 # ============================================================================
 
@@ -463,6 +587,32 @@ class TestIntegration:
         ])
         result = index.handler({}, None)
         assert result["body"]["drained"] == 1
+
+    def test_recently_emptied_instance_not_drained(self, monkeypatch):
+        """Instance whose last task stopped moments ago is skipped by S1 —
+        it's within the grace period and may receive another task shortly."""
+        monkeypatch.setattr(index, "DRY_RUN", False)
+        setup_cluster([
+            {"id": "a", "tasks": []},  # never ran a task, well past grace via age
+            {"id": "b", "tasks": [], "age_minutes": 60,
+             "stopped_tasks": [{"id": "t1", "stopped_minutes_ago": 2}]},
+        ])
+        result = index.handler({}, None)
+        assert result["body"]["drained"] == 1
+        assert mock_ecs.drain_calls[0]["containerInstances"] == [make_instance_arn("a")]
+
+    def test_instance_idle_past_grace_period_drained(self, monkeypatch):
+        """Instance whose last task stopped well before the grace window is
+        a genuine drain candidate."""
+        monkeypatch.setattr(index, "DRY_RUN", False)
+        setup_cluster([
+            {"id": "a", "tasks": [], "age_minutes": 60,
+             "stopped_tasks": [{"id": "t1", "stopped_minutes_ago": 20}]},
+            {"id": "b", "tasks": [{"id": "t2"}]},  # keeps the AZ above minimum
+        ])
+        result = index.handler({}, None)
+        assert result["body"]["drained"] == 1
+        assert mock_ecs.drain_calls[0]["containerInstances"] == [make_instance_arn("a")]
 
     def test_all_well_utilized_no_drains(self):
         """All instances above thresholds → nothing to drain."""

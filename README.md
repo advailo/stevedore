@@ -29,12 +29,18 @@ Each run executes four strategies in order, stopping as soon as one finds work t
 
 | # | Strategy | Trigger | Bin-pack check | AZ check |
 |---|----------|---------|----------------|----------|
-| S1 | **Empty** | 0 running tasks | — | yes |
+| S1 | **Empty** | 0 running tasks, idle ≥ `EMPTY_INSTANCE_GRACE_MINUTES` | — | yes |
 | S2 | **Expired** | instance age ≥ `MAX_INSTANCE_AGE_DAYS` | — | yes |
 | S3 | **Multi** | any non-empty, non-expired instance | yes (greedy) | yes |
 | S4 | **Single** | fallback when S3 finds nothing | yes (first fit) | yes |
 
 S1 and S2 don't need a bin-pack check because ECS managed scaling provisions replacement capacity automatically when an instance is drained. S3 and S4 simulate task placement before committing.
+
+### Empty-instance grace period
+
+An instance that has 0 running tasks right now may have just finished one — on clusters with bursty or short-lived tasks (cron-style jobs, batch work), draining it immediately just means new capacity has to spin back up moments later for the next task. S1 only treats an instance as a genuine drain candidate once it's been idle for at least `EMPTY_INSTANCE_GRACE_MINUTES`.
+
+Idle time is measured from the most recent task that stopped on that instance (via `ecs:ListTasks --desired-status STOPPED`, which ECS retains for roughly an hour), falling back to the instance's registration time if it never ran a task.
 
 ### Bin-packing (First Fit Decreasing)
 
@@ -68,6 +74,12 @@ When multiple instances qualify for S3/S4, they are sorted by:
 1. Fewest running tasks — minimises task disruption
 2. Lowest combined CPU + memory utilisation
 3. Oldest instance age — prefer rotating stale instances
+
+### Scale-in protection cleanup
+
+Every run, before evaluating any drain strategy, stevedore checks existing `DRAINING` instances and releases ASG scale-in protection on any that have fully emptied out (0 running and 0 pending tasks).
+
+This exists because ECS's own managed-draining lifecycle hook only fires when the *Auto Scaling Group itself* initiates a termination (a real scale-in event). It never sees instances stevedore drains directly via `UpdateContainerInstancesState` — that's an out-of-band API call, not an ASG-driven scale-in. Without this cleanup step, a drained instance stays protected — and billed — indefinitely, since nothing else ever tells the ASG it's safe to reclaim. Requires `autoscaling:DescribeAutoScalingInstances` and `autoscaling:SetInstanceProtection`, granted by the Terraform module's IAM policy.
 
 ---
 
@@ -141,6 +153,7 @@ All settings are environment variables:
 | `MIN_INSTANCE_AGE_MINUTES` | `15` | Skip instances newer than this (warmup guard) |
 | `MAX_INSTANCE_AGE_DAYS` | `30` | Drain instances older than this (S2 Expired) |
 | `MIN_INSTANCES_PER_AZ` | `1` | Minimum live instances to keep per AZ |
+| `EMPTY_INSTANCE_GRACE_MINUTES` | `10` | Minutes an instance must stay idle before S1 (Empty) drains it |
 | `DRY_RUN` | `true` | Log only, no actual drains |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
