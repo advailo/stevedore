@@ -51,12 +51,18 @@ class MockECS:
         self.drain_calls.append(kwargs)
         return {}
 
+    def describe_task_definition(self, **kwargs):
+        arn = kwargs.get("taskDefinition")
+        td = self._task_definitions.get(arn) or {"runtimePlatform": {"cpuArchitecture": "X86_64"}}
+        return {"taskDefinition": td}
+
     def reset(self):
         self._container_instances = []
         self._tasks = {}
         self._stopped_tasks = {}
         self._active_arns = []
         self._draining_arns = []
+        self._task_definitions = {}
         self.drain_calls = []
 
 
@@ -156,6 +162,7 @@ os.environ.setdefault("LOG_LEVEL", "DEBUG")
 CLUSTER = "test-cluster"
 REGION = "eu-north-1"
 ACCOUNT = "123456789012"
+DEFAULT_TASK_DEF_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/test-app:1"
 
 
 def make_instance_arn(instance_id):
@@ -175,11 +182,13 @@ def make_container_instance(
     registered_eni=3,
     remaining_eni=3,
     age_minutes=60,
+    arch=None,
 ):
-    """Create a mock ECS container instance."""
+    """Create a mock ECS container instance. `arch` (e.g. "arm64") sets the
+    ecs.cpu-architecture attribute; omitted, index.py defaults to x86_64."""
     arn = make_instance_arn(instance_id)
     registered_at = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
-    return {
+    ci = {
         "containerInstanceArn": arn,
         "ec2InstanceId": f"i-{instance_id}",
         "status": "ACTIVE",
@@ -195,9 +204,12 @@ def make_container_instance(
             {"name": "ENI", "type": "INTEGER", "integerValue": remaining_eni},
         ],
     }
+    if arch:
+        ci["attributes"] = [{"name": "ecs.cpu-architecture", "value": arch}]
+    return ci
 
 
-def make_task(task_id, cpu=256, memory=512, group="service:test-app"):
+def make_task(task_id, cpu=256, memory=512, group="service:test-app", task_definition_arn=None):
     """Create a mock ECS task."""
     return {
         "taskArn": make_task_arn(task_id),
@@ -205,6 +217,7 @@ def make_task(task_id, cpu=256, memory=512, group="service:test-app"):
         "memory": str(memory),
         "group": group,
         "lastStatus": "RUNNING",
+        "taskDefinitionArn": task_definition_arn or DEFAULT_TASK_DEF_ARN,
     }
 
 
@@ -226,12 +239,15 @@ def setup_cluster(instances_config):
     Each item: {
         "id": str,
         "az": str,  # optional, defaults to "eu-north-1a"
+        "arch": str,  # optional, e.g. "arm64" — defaults to "x86_64"
         "registered_cpu": int, "registered_memory": int,
         "remaining_cpu": int, "remaining_memory": int,
         "registered_eni": int, "remaining_eni": int,
         "age_minutes": int,
-        "tasks": [{"id": str, "cpu": int, "memory": int, "group": str}]
+        "tasks": [{"id": str, "cpu": int, "memory": int, "group": str, "arch": str}]
     }
+    A task's "arch" registers a task definition requiring that architecture;
+    omitted, it defaults to x86_64.
     """
     mock_ecs.reset()
     mock_ec2.reset()
@@ -246,6 +262,7 @@ def setup_cluster(instances_config):
             registered_eni=cfg.get("registered_eni", 3),
             remaining_eni=cfg.get("remaining_eni", 3),
             age_minutes=cfg.get("age_minutes", 60),
+            arch=cfg.get("arch"),
         )
         arn = ci["containerInstanceArn"]
         ec2_id = ci["ec2InstanceId"]
@@ -258,11 +275,20 @@ def setup_cluster(instances_config):
 
         tasks = []
         for t_cfg in cfg.get("tasks", []):
+            task_definition_arn = t_cfg.get("task_definition_arn")
+            arch = t_cfg.get("arch")
+            if arch and not task_definition_arn:
+                task_definition_arn = f"{DEFAULT_TASK_DEF_ARN}-{arch}"
+            if arch:
+                mock_ecs._task_definitions[task_definition_arn] = {
+                    "runtimePlatform": {"cpuArchitecture": arch.upper()}
+                }
             tasks.append(make_task(
                 t_cfg["id"],
                 cpu=t_cfg.get("cpu", 256),
                 memory=t_cfg.get("memory", 512),
                 group=t_cfg.get("group", "service:test-app"),
+                task_definition_arn=task_definition_arn,
             ))
         mock_ecs._tasks[arn] = tasks
 

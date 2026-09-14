@@ -787,6 +787,42 @@ class TestAZBinPack:
         assert index.can_bin_pack(tasks, targets) is False
 
 
+class TestArchBinPack:
+    def test_cross_arch_task_cannot_be_placed(self):
+        """An arm64 task must not land on an x86_64-only instance."""
+        tasks = [{"cpu": 256, "memory": 512, "az": "eu-north-1a", "arch": "arm64"}]
+        targets = [{"remaining_cpu": 2048, "remaining_memory": 8192,
+                    "remaining_eni": 3, "az": "eu-north-1a", "arch": "x86_64"}]
+        assert index.can_bin_pack(tasks, targets) is False
+
+    def test_same_arch_task_placed_normally(self):
+        tasks = [{"cpu": 256, "memory": 512, "az": "eu-north-1a", "arch": "arm64"}]
+        targets = [{"remaining_cpu": 2048, "remaining_memory": 8192,
+                    "remaining_eni": 3, "az": "eu-north-1a", "arch": "arm64"}]
+        assert index.can_bin_pack(tasks, targets) is True
+
+    def test_defaults_to_x86_64_when_arch_missing(self):
+        """Records without an arch field (e.g. older callers/tests) are treated
+        as x86_64 on both sides, matching pre-arch-awareness behaviour."""
+        tasks = [{"cpu": 256, "memory": 512, "az": "eu-north-1a"}]
+        targets = [{"remaining_cpu": 2048, "remaining_memory": 8192,
+                    "remaining_eni": 3, "az": "eu-north-1a"}]
+        assert index.can_bin_pack(tasks, targets) is True
+
+    def test_mixed_arch_pool_places_each_task_correctly(self):
+        tasks = [
+            {"cpu": 256, "memory": 512, "az": "eu-north-1a", "arch": "arm64"},
+            {"cpu": 256, "memory": 512, "az": "eu-north-1a", "arch": "x86_64"},
+        ]
+        targets = [
+            {"remaining_cpu": 1024, "remaining_memory": 4096, "remaining_eni": 2,
+             "az": "eu-north-1a", "arch": "arm64"},
+            {"remaining_cpu": 1024, "remaining_memory": 4096, "remaining_eni": 2,
+             "az": "eu-north-1a", "arch": "x86_64"},
+        ]
+        assert index.can_bin_pack(tasks, targets) is True
+
+
 class TestAZConstraintsIntegration:
     def test_single_az_last_instance_not_drained(self, monkeypatch):
         """Last instance in a single-AZ cluster must never be drained even if empty."""
@@ -822,6 +858,48 @@ class TestAZConstraintsIntegration:
             {"id": "a1", "az": "eu-north-1a", "tasks": []},
             {"id": "a2", "az": "eu-north-1a", "tasks": [{"id": "t1"}]},
             {"id": "b1", "az": "eu-north-1b", "tasks": []},
+        ])
+        result = index.handler({}, None)
+        assert result["body"]["drained"] == 1
+
+
+class TestArchConstraintsIntegration:
+    def test_lone_graviton_instance_not_drained_despite_x86_64_spare_capacity(self):
+        """Regression for the tf-advailo-github-runner incident: the only
+        arm64 instance was carrying one task at ~25% CPU / ~26% memory —
+        underutilized enough for S3 to pick it — while several x86_64
+        instances sat mostly idle. Pre-fix, can_bin_pack ignored architecture
+        and concluded the arm64 task could relocate to that x86_64 capacity,
+        so it drained the box the task could never actually be rescheduled
+        onto. It must not be selected for consolidation now."""
+        setup_cluster([
+            {"id": "graviton", "arch": "arm64", "registered_cpu": 1024,
+             "registered_memory": 2048, "remaining_cpu": 768, "remaining_memory": 1512,
+             "tasks": [{"id": "t1", "cpu": 256, "memory": 512, "arch": "arm64"}]},
+            # Not empty (task_count > 0) so S1 doesn't consume the budget first,
+            # and fully packed by their own task so S3 has no legitimate reason
+            # to touch them either — isolates the assertion to the arch check.
+            {"id": "x86-1", "arch": "x86_64", "registered_cpu": 256,
+             "registered_memory": 512, "remaining_cpu": 0, "remaining_memory": 0,
+             "tasks": [{"id": "t2", "cpu": 256, "memory": 512, "arch": "x86_64"}]},
+            {"id": "x86-2", "arch": "x86_64", "registered_cpu": 256,
+             "registered_memory": 512, "remaining_cpu": 0, "remaining_memory": 0,
+             "tasks": [{"id": "t3", "cpu": 256, "memory": 512, "arch": "x86_64"}]},
+        ])
+        result = index.handler({}, None)
+        assert result["body"]["drained"] == 0
+
+    def test_second_graviton_instance_with_spare_capacity_allows_drain(self):
+        """Sanity check the fix isn't overly conservative: when another arm64
+        instance genuinely has room, the underutilized arm64 instance can
+        still be consolidated."""
+        setup_cluster([
+            {"id": "graviton-a", "arch": "arm64", "registered_cpu": 1024,
+             "registered_memory": 2048, "remaining_cpu": 768, "remaining_memory": 1512,
+             "tasks": [{"id": "t1", "cpu": 256, "memory": 512, "arch": "arm64"}]},
+            {"id": "graviton-b", "arch": "arm64", "registered_cpu": 2048,
+             "registered_memory": 8192, "remaining_cpu": 2048, "remaining_memory": 8192,
+             "tasks": []},
         ])
         result = index.handler({}, None)
         assert result["body"]["drained"] == 1

@@ -2,7 +2,8 @@
 
 Continuously reconciles cluster state by draining underutilized, empty, and
 expired instances. Uses bin-pack simulation (FFD) to verify tasks can be
-relocated before draining.
+relocated before draining — respecting both AZ and CPU architecture
+(x86_64 vs arm64/Graviton) boundaries.
 
 Strategies (executed in order):
   1. Empty     — instances with 0 running tasks, idle for EMPTY_INSTANCE_GRACE_MINUTES
@@ -141,6 +142,26 @@ def _get_resource(resources, name):
     return 0
 
 
+def _get_attribute(attributes, name, default=None):
+    """Extract a string value from an ECS container instance attributes list."""
+    for a in attributes:
+        if a.get("name") == name:
+            return a.get("value", default)
+    return default
+
+
+def _task_definition_arch(cache, task_definition_arn):
+    """Cache-fetch a task definition's required CPU architecture, lowercased
+    to match the ecs.cpu-architecture container instance attribute format.
+    Defaults to x86_64 — ECS's own default runtime platform — when a task
+    definition doesn't declare one."""
+    if task_definition_arn not in cache:
+        resp = ecs.describe_task_definition(taskDefinition=task_definition_arn)
+        arch = resp["taskDefinition"].get("runtimePlatform", {}).get("cpuArchitecture", "X86_64")
+        cache[task_definition_arn] = arch.lower()
+    return cache[task_definition_arn]
+
+
 def _describe_container_instances(cluster, arns):
     """Describe container instances in batches of 100, filtering out EXTERNAL
     (ECS Anywhere) instances — they are not managed by auto-scaling and must
@@ -186,10 +207,12 @@ def discover_cluster_state(cluster):
                 az_map[inst_info["InstanceId"]] = inst_info["Placement"]["AvailabilityZone"]
 
     # Build instance records with their tasks
+    task_def_arch_cache = {}
     active_instances = []
     for ci in instances:
         arn = ci["containerInstanceArn"]
         az = az_map.get(ci["ec2InstanceId"], "unknown")
+        arch = _get_attribute(ci.get("attributes", []), "ecs.cpu-architecture", "x86_64")
 
         # Get tasks for this instance
         task_arns = _paginate_tasks(cluster, arn)
@@ -204,6 +227,7 @@ def discover_cluster_state(cluster):
                     "memory": int(t.get("memory", "0")),
                     "group": t.get("group", ""),
                     "az": az,
+                    "arch": _task_definition_arch(task_def_arch_cache, t["taskDefinitionArn"]),
                 })
 
         # Only relevant to instances that currently look empty — an instance
@@ -214,6 +238,7 @@ def discover_cluster_state(cluster):
             "arn": arn,
             "ec2_instance_id": ci["ec2InstanceId"],
             "az": az,
+            "arch": arch,
             "registered_at": ci["registeredAt"],
             "registered_cpu": _get_resource(ci["registeredResources"], "CPU"),
             "registered_memory": _get_resource(ci["registeredResources"], "MEMORY"),
@@ -316,11 +341,17 @@ def score_candidate(instance):
 
 
 def can_bin_pack(tasks, target_instances):
-    """Check if tasks fit on target instances (CPU + memory + ENI), respecting AZ boundaries.
+    """Check if tasks fit on target instances (CPU + memory + ENI), respecting
+    AZ and CPU architecture boundaries.
 
-    Tasks are only placed on instances in the same AZ. In a single-AZ cluster all
-    instances share one AZ so the behaviour is identical to the previous version.
-    Falls back to az="default" for any record that lacks the field (unit tests).
+    Tasks are only placed on instances in the same AZ that also match the
+    task's required CPU architecture (x86_64 vs arm64/Graviton) — a task
+    can't actually run on an instance whose architecture it wasn't built for,
+    so treating arch like AZ here prevents "fits elsewhere" simulations that
+    ECS could never make good on. In a single-AZ, single-arch cluster all
+    instances share one bucket so the behaviour is identical to the previous
+    version. Falls back to az="default"/arch="x86_64" for any record that
+    lacks the field (unit tests).
     """
     if not tasks:
         return True
@@ -329,18 +360,18 @@ def can_bin_pack(tasks, target_instances):
 
     sorted_tasks = sorted(tasks, key=lambda t: t["cpu"] + t["memory"], reverse=True)
 
-    # Build per-AZ mutable capacity pools (FFD within each zone).
+    # Build per-(AZ, arch) mutable capacity pools (FFD within each bucket).
     # eni_constrained=False when registered_eni==0: instance doesn't track ENI
     # slots (bridge/host network mode) so the constraint doesn't apply.
-    by_az: dict = {}
+    by_bucket: dict = {}
     for inst in target_instances:
-        az = inst.get("az", "default")
+        bucket = (inst.get("az", "default"), inst.get("arch", "x86_64"))
         # ENI is only a constraint when the instance actually registers ENI slots
         # (awsvpc mode). In bridge/host mode registered_eni==0 and the check
         # must be skipped. Unit-test targets may omit registered_eni; fall back
         # to remaining_eni>0 as a "this target tracks ENI" signal.
         reg_eni = inst.get("registered_eni", inst.get("remaining_eni", 0))
-        by_az.setdefault(az, []).append({
+        by_bucket.setdefault(bucket, []).append({
             "remaining_cpu": inst["remaining_cpu"],
             "remaining_memory": inst["remaining_memory"],
             "remaining_eni": inst["remaining_eni"],
@@ -348,9 +379,9 @@ def can_bin_pack(tasks, target_instances):
         })
 
     for task in sorted_tasks:
-        task_az = task.get("az", "default")
+        task_bucket = (task.get("az", "default"), task.get("arch", "x86_64"))
         placed = False
-        for target in by_az.get(task_az, []):
+        for target in by_bucket.get(task_bucket, []):
             eni_ok = (not target["eni_constrained"]) or (target["remaining_eni"] >= 1)
             if (target["remaining_cpu"] >= task["cpu"]
                     and target["remaining_memory"] >= task["memory"]

@@ -73,6 +73,15 @@ resource "aws_iam_role_policy" "ecs_consolidation_ecs" {
         Resource = [
           "arn:aws:ecs:${local.region}:${local.account_id}:task/${var.ecs_cluster_name}/*"
         ]
+      },
+      {
+        Action = [
+          "ecs:DescribeTaskDefinition",
+        ]
+        Effect = "Allow"
+        Resource = [
+          "arn:aws:ecs:${local.region}:${local.account_id}:task-definition/*"
+        ]
       }
     ]
   })
