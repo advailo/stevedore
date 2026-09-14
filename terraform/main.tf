@@ -75,13 +75,15 @@ resource "aws_iam_role_policy" "ecs_consolidation_ecs" {
         ]
       },
       {
+        # DescribeTaskDefinition has no resource-level permission support —
+        # AWS normalizes it to "*" regardless of what's specified here, so a
+        # scoped task-definition ARN silently never matches and every call
+        # gets denied.
         Action = [
           "ecs:DescribeTaskDefinition",
         ]
-        Effect = "Allow"
-        Resource = [
-          "arn:aws:ecs:${local.region}:${local.account_id}:task-definition/*"
-        ]
+        Effect   = "Allow"
+        Resource = ["*"]
       }
     ]
   })
