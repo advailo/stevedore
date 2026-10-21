@@ -17,7 +17,7 @@ import logging
 import math
 import os
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import boto3
 from botocore.exceptions import ClientError
@@ -277,8 +277,8 @@ def compute_instance_metrics(instance):
 
     registered_at = instance["registered_at"]
     if registered_at.tzinfo is None:
-        registered_at = registered_at.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
+        registered_at = registered_at.replace(tzinfo=UTC)
+    now = datetime.now(UTC)
     age = now - registered_at
     instance["age_minutes"] = age.total_seconds() / 60
     instance["age_days"] = age.days
@@ -286,7 +286,7 @@ def compute_instance_metrics(instance):
     if instance["task_count"] == 0:
         last_stopped_at = instance.get("last_stopped_at")
         if last_stopped_at and last_stopped_at.tzinfo is None:
-            last_stopped_at = last_stopped_at.replace(tzinfo=timezone.utc)
+            last_stopped_at = last_stopped_at.replace(tzinfo=UTC)
         idle_since = last_stopped_at or registered_at
         instance["idle_minutes"] = (now - idle_since).total_seconds() / 60
     else:
