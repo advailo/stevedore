@@ -2,7 +2,7 @@
 import os
 import sys
 import types
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -187,7 +187,7 @@ def make_container_instance(
     """Create a mock ECS container instance. `arch` (e.g. "arm64") sets the
     ecs.cpu-architecture attribute; omitted, index.py defaults to x86_64."""
     arn = make_instance_arn(instance_id)
-    registered_at = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
+    registered_at = datetime.now(UTC) - timedelta(minutes=age_minutes)
     ci = {
         "containerInstanceArn": arn,
         "ec2InstanceId": f"i-{instance_id}",
@@ -229,7 +229,7 @@ def make_stopped_task(task_id, stopped_minutes_ago=0):
         "memory": "0",
         "group": "",
         "lastStatus": "STOPPED",
-        "stoppedAt": datetime.now(timezone.utc) - timedelta(minutes=stopped_minutes_ago),
+        "stoppedAt": datetime.now(UTC) - timedelta(minutes=stopped_minutes_ago),
     }
 
 

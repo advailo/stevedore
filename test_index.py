@@ -1,6 +1,6 @@
 """Tests for Karpenter-inspired ECS consolidation engine."""
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -71,7 +71,7 @@ class TestMetrics:
         inst = {
             "registered_cpu": 2048, "remaining_cpu": 1024,
             "registered_memory": 7680, "remaining_memory": 3840,
-            "registered_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "registered_at": datetime.now(UTC) - timedelta(hours=2),
             "tasks": [{"arn": "t1"}],
         }
         index.compute_instance_metrics(inst)
@@ -83,7 +83,7 @@ class TestMetrics:
         inst = {
             "registered_cpu": 2048, "remaining_cpu": 2048,
             "registered_memory": 7680, "remaining_memory": 7680,
-            "registered_at": datetime.now(timezone.utc),
+            "registered_at": datetime.now(UTC),
             "tasks": [],
         }
         index.compute_instance_metrics(inst)
@@ -95,7 +95,7 @@ class TestMetrics:
         inst = {
             "registered_cpu": 2048, "remaining_cpu": 2048,
             "registered_memory": 7680, "remaining_memory": 7680,
-            "registered_at": datetime.now(timezone.utc) - timedelta(days=31, hours=5),
+            "registered_at": datetime.now(UTC) - timedelta(days=31, hours=5),
             "tasks": [],
         }
         index.compute_instance_metrics(inst)
@@ -106,7 +106,7 @@ class TestMetrics:
         inst = {
             "registered_cpu": 2048, "remaining_cpu": 1024,
             "registered_memory": 7680, "remaining_memory": 3840,
-            "registered_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "registered_at": datetime.now(UTC) - timedelta(hours=2),
             "tasks": [{"arn": "t1"}],
         }
         index.compute_instance_metrics(inst)
@@ -116,9 +116,9 @@ class TestMetrics:
         inst = {
             "registered_cpu": 2048, "remaining_cpu": 2048,
             "registered_memory": 7680, "remaining_memory": 7680,
-            "registered_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "registered_at": datetime.now(UTC) - timedelta(hours=2),
             "tasks": [],
-            "last_stopped_at": datetime.now(timezone.utc) - timedelta(minutes=3),
+            "last_stopped_at": datetime.now(UTC) - timedelta(minutes=3),
         }
         index.compute_instance_metrics(inst)
         assert inst["idle_minutes"] == pytest.approx(3, abs=0.1)
@@ -127,7 +127,7 @@ class TestMetrics:
         inst = {
             "registered_cpu": 2048, "remaining_cpu": 2048,
             "registered_memory": 7680, "remaining_memory": 7680,
-            "registered_at": datetime.now(timezone.utc) - timedelta(minutes=45),
+            "registered_at": datetime.now(UTC) - timedelta(minutes=45),
             "tasks": [],
         }
         index.compute_instance_metrics(inst)
