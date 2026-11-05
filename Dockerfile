@@ -24,14 +24,14 @@
 # ── Build stage: install dependencies into /build ────────────────────────────
 # Pinned by digest (Dependabot's docker ecosystem update keeps this current) —
 # the tag alone is mutable and floats to whatever AWS republishes under 3.14.
-FROM public.ecr.aws/lambda/python:3.14@sha256:252cbb0879717b1c049b9f909d86d06d88e129f3208386d7ba1189d535f5f981 AS build
+FROM public.ecr.aws/lambda/python:3.15@sha256:fb2b0ee9404b4f66f7d0d02c9851cc10a5e335a0d4e8613454e974f8f0381eea AS build
 
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt --target .
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
-FROM public.ecr.aws/lambda/python:3.14@sha256:252cbb0879717b1c049b9f909d86d06d88e129f3208386d7ba1189d535f5f981
+FROM public.ecr.aws/lambda/python:3.15@sha256:fb2b0ee9404b4f66f7d0d02c9851cc10a5e335a0d4e8613454e974f8f0381eea
 
 WORKDIR ${LAMBDA_TASK_ROOT}
 
