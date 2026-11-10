@@ -33,11 +33,11 @@ data "aws_ecr_repository" "stevedore" {
 }
 
 module "ecs_consolidation" {
-  source = "github.com/advailo/stevedore//terraform?ref=v1.0.0"
+  source = "github.com/advailo/stevedore//terraform?ref=v0.10.2"
 
   name_prefix      = "myapp-prod"
   ecr_arn          = data.aws_ecr_repository.stevedore.arn
-  image_uri        = "123456789012.dkr.ecr.us-east-1.amazonaws.com/stevedore:v1.0.0"
+  image_uri        = "123456789012.dkr.ecr.us-east-1.amazonaws.com/stevedore:v0.10.2"
   ecs_cluster_name = data.aws_ecs_cluster.this.cluster_name
   ecs_cluster_arn  = data.aws_ecs_cluster.this.arn
   vpc_id           = data.aws_vpc.this.id
