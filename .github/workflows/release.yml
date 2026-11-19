@@ -81,6 +81,36 @@ jobs:
           sarif_file: trivy-image.sarif
           category: trivy-image-${{ matrix.tag-suffix }}
 
+      - name: Generate CycloneDX SBOM
+        if: matrix.tag-suffix == 'amd64'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          scan-type: image
+          image-ref: stevedore:${{ matrix.tag-suffix }}
+          format: cyclonedx
+          output: sbom.json
+
+      - name: Upload SBOM to Dependency-Track
+        if: matrix.tag-suffix == 'amd64'
+        env:
+          DEPENDENCY_TRACK_API_KEY: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
+            -H "X-Api-Key: ${DEPENDENCY_TRACK_API_KEY}" \
+            -F "autoCreate=true" \
+            -F "projectName=stevedore" \
+            -F "projectVersion=${VERSION}" \
+            -F "parentName=stevedore" \
+            -F "isLatest=true" \
+            -F "bom=@sbom.json;type=application/json" \
+            "https://sbom.advailo.cloud/api/v1/bom")
+          echo "SBOM upload status: ${STATUS}"
+          if [ "${STATUS}" -ge 400 ]; then
+            echo "::warning::SBOM upload to Dependency-Track failed with status ${STATUS}"
+          fi
+
       - name: Push to ECR Public
         run: |
           docker tag stevedore:${{ matrix.tag-suffix }} public.ecr.aws/advailo/stevedore:${{ github.ref_name }}-${{ matrix.tag-suffix }}
